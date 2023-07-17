@@ -1,0 +1,67 @@
+# Sample workflow to access AWS resources when workflow is tied to branch
+# The workflow Creates static website using aws s3
+name: RHEL7 workflow
+on:
+  push:
+     branches:
+      - main
+     paths:
+      - 'rhel7/**'
+#env:
+#  BUCKET_NAME : "<example-bucket-name>"
+#  AWS_REGION : "<example-aws-region>"
+# permission can be added at job level or workflow level    
+permissions:
+      id-token: write   # This is required for requesting the JWT
+      contents: read    # This is required for actions/checkout
+jobs:
+  Packer-RHEL7-Build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+       shell: bash
+       working-directory: rhel7
+    steps:
+      - name: Git clone the repository
+        uses: actions/checkout@v3
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.PACKER_ROLE }}
+          role-session-name: samplerolesession
+          role-duration-seconds: 7200
+          aws-region: eu-west-1
+      # Upload a file to AWS s3
+      - name:  check s3 list
+        run: |
+          aws s3 ls    
+     # Install Session Manager plugin
+      - name: Install plugin 
+        run: | 
+           curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" -o "session-manager-plugin.deb"
+           sudo dpkg -i session-manager-plugin.deb
+           session-manager-plugin --version
+     # Github configuration
+      - name: Github configuration
+        run: | 
+           git --version
+           cd /tmp
+           git clone --branch main https://${{ secrets.USER }}:${{ secrets.REPOTOKEN }}@github.com/IAG-Ent/dc-exit-images.git
+          
+     # validate templates
+      - name: Validate Template
+        run: packer validate -syntax-only -var-file="/tmp/dc-exit-images/variable.pkrvars.hcl" rhel7.pkr.hcl        
+     # build artifact
+      - name: Build Artifact
+        run:  | 
+            packer build -color=false -var-file="/tmp/dc-exit-images/variable.pkrvars.hcl" rhel7.pkr.hcl 
+        env:
+          PACKER_LOG: 1 
+     # Share the AMI to other Organizations
+      - name: Share the AMI to other Organizations
+        run: |
+         # sleep 10m
+          ami_id=$(aws ec2 describe-images --owners 527296198219 --filters 'Name=name,Values=Base-Golden-Rhel7-DC-Exit-*' 'Name=state,Values=available' --output json |jq -r '.Images | sort_by(.CreationDate) | last(.[]).ImageId') 
+          echo $ami_id
+          aws ec2 modify-image-attribute  --image-id $ami_id  --launch-permission ""Add=[{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-fmt83a93},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-kox9ihsr},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-qcweakfo},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-767s4hf4},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-au8im24n},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-ztrt404p},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-sd4523hi},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-sgpcnv09},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-yoz7bi45},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-k2avg9p6},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-rexgm23f},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-1oq61trh},{OrganizationalUnitArn=arn:aws:organizations::246204843009:ou/o-8fnivsg9gh/ou-vmnq-smink0v0}]""
+    
